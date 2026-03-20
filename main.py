@@ -21,52 +21,55 @@ async def scale_embroidery(file: UploadFile = File(...), scale: float = Form(...
     input_path = f"temp_{temp_id}_{file.filename}"
     output_path = f"scaled_{temp_id}_{file.filename}"
     
-    with open(input_path, "wb") as f:
-        f.write(await file.read())
+    try:
+        content = await file.read()
+        with open(input_path, "wb") as f:
+            f.write(content)
 
-    pattern = pyembroidery.read(input_path)
-    new_pattern = pyembroidery.EmbPattern()
-    
-    # --- COLOR EXTRACTION ---
-    colors = []
-    for thread in pattern.threadlist:
-        hex_color = f"#{thread.red:02x}{thread.green:02x}{thread.blue:02x}"
-        colors.append(hex_color)
-    
-    # If no colors found (common in DST), provide a default bee palette
-    if not colors:
-        colors = ["#000000", "#FFD700", "#FFFFFF"]
-
-    # --- PERFECT SCALING LOGIC ---
-    MAX_STITCH_LENGTH = 3.2
-    last_x, last_y = 0, 0
-    for x, y, cmd in pattern.stitches:
-        tx, ty = x * scale, y * scale
-        dist = ((tx - last_x)**2 + (ty - last_y)**2)**0.5
+        pattern = pyembroidery.read(input_path)
+        new_pattern = pyembroidery.EmbPattern()
         
-        if cmd == pyembroidery.STITCH and dist > MAX_STITCH_LENGTH:
-            steps = int(dist // MAX_STITCH_LENGTH)
-            for i in range(1, steps + 1):
-                f = i / (steps + 1)
-                new_pattern.add_stitch_absolute(pyembroidery.STITCH, last_x + (tx-last_x)*f, last_y + (ty-last_y)*f)
-        
-        new_pattern.add_stitch_absolute(cmd, tx, ty)
-        last_x, last_y = tx, ty
+        # 1. COLOR LOGIC: Professional Neutral Fallback
+        colors = []
+        if pattern.threadlist:
+            for thread in pattern.threadlist:
+                colors.append(f"#{thread.red:02x}{thread.green:02x}{thread.blue:02x}")
+        else:
+            # If no colors (DST), send 'blueprint' flag
+            colors = ["BLUEPRINT"] 
 
-    pyembroidery.write(new_pattern, output_path)
+        # 2. ADAPTIVE SCALING LOGIC
+        MAX_STITCH_LENGTH = 3.2
+        last_x, last_y = 0, 0
+        for x, y, cmd in pattern.stitches:
+            tx, ty = x * scale, y * scale
+            dx, dy = tx - last_x, ty - last_y
+            dist = (dx**2 + dy**2)**0.5
+            
+            if cmd == pyembroidery.STITCH and dist > MAX_STITCH_LENGTH:
+                steps = int(dist // MAX_STITCH_LENGTH)
+                for i in range(1, steps + 1):
+                    f_val = i / (steps + 1)
+                    new_pattern.add_stitch_absolute(pyembroidery.STITCH, last_x + dx*f_val, last_y + dy*f_val)
+            
+            new_pattern.add_stitch_absolute(cmd, tx, ty)
+            last_x, last_y = tx, ty
 
-    # --- ENCODE FILE FOR JSON ---
-    with open(output_path, "rb") as f:
-        encoded_file = base64.b64encode(f.read()).decode('utf-8')
+        pyembroidery.write(new_pattern, output_path)
 
-    # Cleanup
-    os.remove(input_path)
-    os.remove(output_path)
+        with open(output_path, "rb") as f:
+            encoded_file = base64.b64encode(f.read()).decode('utf-8')
 
-    return JSONResponse({
-        "status": "success",
-        "new_stitch_count": len(new_pattern.stitches),
-        "colors": colors,
-        "base64_file": encoded_file,
-        "filename": f"scaled_{file.filename}"
-    })
+        return JSONResponse({
+            "status": "success",
+            "new_stitch_count": len(new_pattern.stitches),
+            "colors": colors,
+            "base64_file": encoded_file,
+            "filename": f"scaled_{file.filename}"
+        })
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        if os.path.exists(input_path): os.remove(input_path)
+        if os.path.exists(output_path): os.remove(output_path)
