@@ -33,7 +33,7 @@ async def scale_embroidery(
         pattern = pyembroidery.read(input_path)
         new_pattern = pyembroidery.EmbPattern()
         
-        # Fabric Pull Compensation Map
+        # Fabric Pull Compensation
         compensation_map = {
             "Jersey/T-Shirt": 1.12,
             "Denim/Canvas": 1.02,
@@ -43,7 +43,7 @@ async def scale_embroidery(
         }
         comp_factor = compensation_map.get(fabric, 1.05)
 
-        # Color/Blueprint Logic
+        # Color Logic
         colors = []
         if pattern.threadlist:
             for thread in pattern.threadlist:
@@ -51,9 +51,9 @@ async def scale_embroidery(
         else:
             colors = ["BLUEPRINT"] 
 
-        # Scaling & Auto-Trim Engine
+        # Scaling, Injection, and Auto-Trim
         MAX_STITCH_LENGTH = 3.2
-        TRIM_THRESHOLD = 5.0  # If a jump is > 5mm, we force a TRIM
+        TRIM_THRESHOLD = 50.0 # 5mm in embroidery units
         last_x, last_y = 0, 0
         
         for x, y, cmd in pattern.stitches:
@@ -63,12 +63,11 @@ async def scale_embroidery(
             dx, dy = tx - last_x, ty - last_y
             dist = (dx**2 + dy**2)**0.5
             
-            # --- AUTO-TRIM LOGIC ---
-            # If the command is a JUMP and it's long, insert a TRIM
-            if cmd == pyembroidery.JUMP and dist > (TRIM_THRESHOLD * 10): 
+            # Insert TRIM for long jumps to clean up "weird lines"
+            if cmd == pyembroidery.JUMP and dist > TRIM_THRESHOLD:
                 new_pattern.add_stitch_absolute(pyembroidery.TRIM, tx, ty)
             
-            # --- DENSITY CORRECTION (STITCH INJECTION) ---
+            # Density Correction
             if cmd == pyembroidery.STITCH and dist > MAX_STITCH_LENGTH:
                 steps = int(dist // MAX_STITCH_LENGTH)
                 for i in range(1, steps + 1):
@@ -82,9 +81,7 @@ async def scale_embroidery(
             new_pattern.add_stitch_absolute(cmd, tx, ty)
             last_x, last_y = tx, ty
 
-        # Final Polish: Ensure the pattern ends correctly
         new_pattern.add_stitch_relative(pyembroidery.END, 0, 0)
-        
         pyembroidery.write(new_pattern, output_path)
 
         with open(output_path, "rb") as f:
